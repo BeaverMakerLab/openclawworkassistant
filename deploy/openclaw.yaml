@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # ---------------------------------
+  # 1. 一次性修复 OpenClaw 文件权限与清理残留锁文件
+  # ---------------------------------
+  permission-fix:
+    image: alpine:latest
+    container_name: openclaw-permission-fix
+    user: "0:0"
+    volumes:
+      - /volume1/docker/openclaw/config:/config
+      - /volume1/docker/openclaw/workspace:/workspace
+      - /volume1/docker/openclaw/script:/script
+    command: >
+      sh -c "
+      chown -R 1000:1000 /config /workspace /script &&
+      chmod -R u+rwX /config /workspace /script &&
+      find /config -name '*.lock' -delete
+      "
+    restart: "no"
+
+  # ---------------------------------
+  # 2. DoH DNS代理（优化版：国内+国际并发解析）
+  # ---------------------------------
+  dnsproxy:
+    image: adguard/dnsproxy:latest
+    container_name: openclaw-dns
+    restart: unless-stopped
+    command:
+      - "-l"
+      - "0.0.0.0"
+      - "-p"
+      - "53"
+      # 国内主力 DoH（加速国内服务如飞书）
+      - "-u"
+      - "https://dns.alidns.com/dns-query"
+      # 腾讯国内 DoH 备用
+      - "-u"
+      - "https://doh.pub/dns-query"
+      # 国际备用 DoH
+      - "-u"
+      - "https://dns.google/dns-query"
+      - "-u"
+      - "https://cloudflare-dns.com/dns-query"
+      # 基础快速解析备用
+      - "-u"
+      - "223.5.5.5"
+      # 并发向所有上游查询，选用最快响应结果
+      - "--upstream-mode=parallel"
+      - "--cache"
+    networks:
+      openclaw_net:
+        ipv4_address: 172.29.100.2
+
+  # ---------------------------------
+  # 3. OpenClaw Gateway 主服务
+  # ---------------------------------
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw
+    restart: unless-stopped
+    group_add:
+      - "0"
+    ports:
+      - "18789:18789"
+    volumes:
+      # OpenClaw 配置及飞书接收的媒体目录
+      - /volume1/docker/openclaw/config:/home/node/.openclaw
+      # 工作区目录
+      - /volume1/docker/openclaw/workspace:/home/node/.openclaw/workspace
+      # 外部扩展脚本目录
+      - /volume1/docker/openclaw/script:/home/node/.openclaw/script
+      # ★允许 OpenClaw 跨容器调用其他工具容器（如语音转写容器）
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DEEPSEEK_API_KEY=sk-your-api-key-here
+      - TZ=Asia/Shanghai
+      - OPENCLAW_GATEWAY_BIND=lan
+    dns:
+      - 172.29.100.2
+    networks:
+      openclaw_net:
+        ipv4_address: 172.29.100.10
+    depends_on:
+      - permission-fix
+      - dnsproxy
+    tty: true
+    stdin_open: true
+    command:
+      - openclaw
+      - gateway
+      - --port
+      - "18789"
+
+# ---------------------------------
+# Docker 内部网络
+# ---------------------------------
+networks:
+  openclaw_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.100.0/24

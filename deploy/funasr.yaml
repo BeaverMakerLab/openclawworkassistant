@@ -1,0 +1,121 @@
+version: "3.8"
+
+services:
+
+  funasr:
+    image: registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr:funasr-runtime-sdk-cpu-0.4.6
+    container_name: fun-asr
+    restart: unless-stopped
+
+    ports:
+      - "10095:10095"
+
+    volumes:
+      # 模型缓存
+      - /volume1/docker/funasr/models:/workspace/models
+
+      # 原始/转换后的音频
+      - /volume1/docker/funasr/input:/workspace/input
+
+      # 转写结果
+      - /volume1/docker/funasr/output:/workspace/output
+
+    working_dir: /workspace/FunASR/runtime
+
+    command:
+      - /workspace/FunASR/runtime/websocket/build/bin/funasr-wss-server
+
+      - --download-model-dir
+      - /workspace/models
+
+      - --model-dir
+      - damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx
+
+      - --vad-dir
+      - damo/speech_fsmn_vad_zh-cn-16k-common-onnx
+
+      - --punc-dir
+      - damo/punc_ct-transformer_cn-en-common-vocab471067-large-onnx
+
+      - --itn-dir
+      - thuduj12/fst_itn_zh
+
+      - --lm-dir
+      - damo/speech_ngram_lm_zh-cn-ai-wesp-fst
+
+      - --decoder-thread-num
+      - "4"
+
+      - --model-thread-num
+      - "1"
+
+      - --io-thread-num
+      - "1"
+
+      - --port
+      - "10095"
+
+      - --certfile
+      - "0"
+
+      - --keyfile
+      - "0"
+
+      - --hotword
+      - /workspace/FunASR/runtime/websocket/hotwords.txt
+
+    networks:
+      - openclaw_net
+
+
+  ffmpeg:
+    image: lscr.io/linuxserver/ffmpeg:latest
+    container_name: audio-ffmpeg
+
+    volumes:
+      - /volume1/docker/funasr/input:/audio/input
+      - /volume1/docker/funasr/output:/audio/output
+
+    entrypoint:
+      - /bin/sh
+
+    command:
+      - -c
+      - "tail -f /dev/null"
+
+    restart: unless-stopped
+
+    networks:
+      - openclaw_net
+
+
+  pyannote:
+    build:
+      context: ./pyannote
+      dockerfile: Dockerfile
+
+    image: local/pyannote-diarization:latest
+    container_name: pyannote-diarization
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      HF_HOME: /models/huggingface
+      PYANNOTE_METRICS_ENABLED: "0"
+
+    volumes:
+      - /volume1/docker/funasr/input:/audio/input
+      - /volume1/docker/funasr/output:/audio/output
+      - /volume1/docker/funasr/models-pyannote:/models
+
+    networks:
+      - openclaw_net
+
+
+networks:
+  openclaw_net:
+    external: true
+    name: openclaw_openclaw_net
